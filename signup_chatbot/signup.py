@@ -174,7 +174,7 @@ class Signup:
             module_logger.debug(f"LLMClient.generate call for {user_id}. Messages: {json.dumps(messages_for_llm, indent=2)}")
             
             # The LLMClient and its provider will handle the tool call loop
-            generated_content, collected_tool_payloads = await self.llm_client.generate(
+            llm_response_text, _ = await self.llm_client.generate(
                 messages=messages_for_llm,
                 # model=self.config.openai_default_model, # Already set in LLMClient init or can override here
                 use_tools=["edit_user_profile"],
@@ -182,22 +182,6 @@ class Signup:
                 temperature=0.5,
                 # max_tool_iterations can be passed if needed (default is 5 in OpenAIProvider)
             )
-            llm_response_text = generated_content or ""
-            
-            if collected_tool_payloads:
-                module_logger.info(f"Collected tool payloads for {user_id}: {collected_tool_payloads}")
-                # Handle payloads if your tools are designed to return them (EditUserProfileTool currently doesn't)
-
-            # If LLM gives an empty response after a successful update, you might still want a default ack.
-            # The OpenAIProvider.generate loop tries to get a final text response.
-            # However, if the tool was called and `generated_content` is empty, check if an update happened.
-            # This part might need adjustment based on how `LLMClient.generate` behaves when the last step was a tool call.
-            # The current OpenAIProvider should return content after tool execution.
-            if not llm_response_text:
-                 # Re-fetch profile to see if an update happened
-                _, profile_error = self._get_user_profile_as_model(user_id)
-                if not profile_error: # and an update was implied by tool execution
-                    llm_response_text = self.config.profile_updated_ack # Or a more dynamic ack.
 
         except (ProviderError, ToolError, LLMToolkitError) as e: # Catch toolkit specific errors
             module_logger.exception(f"LLM Toolkit error during interaction for {user_id}: {e}")
@@ -207,7 +191,7 @@ class Signup:
             llm_response_text = self.config.default_error_message
 
         # Fallback if LLM response is empty
-        if not llm_response_text.strip():
+        if not llm_response_text:
             if self.is_signup_complete(user_id):
                 llm_response_text = self.config.signup_complete_message
             else:
