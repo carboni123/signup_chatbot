@@ -1,0 +1,16 @@
+[project]
+name = "signup_chatbot"
+version = "0.0.1"
+description = "Signup Module for Chatbots"
+authors = [{ name = "Diego Carboni", email = "diegofcarboni@gmail.com" }]
+dependencies = ["pydantic>=2.11.3", "openai>=1.76.0"]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "pre-commit"]
+examples = [
+  "python-dotenv>=1.1.0",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
