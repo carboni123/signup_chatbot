@@ -4,7 +4,7 @@ import json
 from typing import Dict, Any, Callable, Type, Optional
 
 from pydantic import BaseModel, ValidationError
-from .tool_models import ToolExecutionResult
+from llm_factory_toolkit.tools.models import ToolExecutionResult
 
 module_logger = logging.getLogger(__name__)
 

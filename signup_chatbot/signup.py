@@ -5,12 +5,11 @@ import json
 from typing import Optional, Tuple, Callable, Type, Dict, Any, List
 
 from pydantic import BaseModel, ValidationError
-from openai import AsyncOpenAI, OpenAIError # Import OpenAIError for specific exception handling
-from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall # For type hinting
+from llm_factory_toolkit import LLMClient, ToolFactory
+from llm_factory_toolkit.exceptions import ProviderError, ToolError, LLMToolkitError
 
 from .memory import Memory
 from .tools.edit_user_profile import EditUserProfileTool
-from .tools.tool_models import ToolExecutionResult
 from .config_models import SignupConfig
 
 module_logger = logging.getLogger(__name__)
@@ -49,19 +48,31 @@ class Signup:
         self.config = signup_config or SignupConfig()
 
         self.sessions = Memory()
-        self.client = AsyncOpenAI(
-            api_key=self.config.openai_api_key or os.getenv("OPENAI_API_KEY")
-        )
-        if not (self.config.openai_api_key or os.getenv("OPENAI_API_KEY")):
-            module_logger.warning("OpenAI API key is not set. LLM calls will fail.")
-
+        
+        self.tool_factory = ToolFactory()
         self.edit_user_profile_tool = EditUserProfileTool(
             update_user_state_func=self._internal_profile_update_wrapper,
             editable_fields_model=self.user_model_cls,
             tool_name=edit_tool_name,
             tool_description=edit_tool_description,
         )
+        self.tool_factory.register_tool(
+            function=self.edit_user_profile_tool, 
+            name=self.edit_user_profile_tool.name,
+            description=self.edit_user_profile_tool.description, 
+            parameters=self.edit_user_profile_tool.parameters
+        )
 
+        self.llm_client = LLMClient(
+            provider_type="openai",
+            api_key=self.config.openai_api_key or os.getenv("OPENAI_API_KEY"),
+            tool_factory=self.tool_factory,
+            model=self.config.openai_default_model # Pass default model to provider
+        )
+        
+        if not (self.config.openai_api_key or os.getenv("OPENAI_API_KEY")):
+            module_logger.warning("OpenAI API key is not set. LLM calls will fail.")
+            
     def _internal_profile_update_wrapper(
         self,
         user_id: str,
@@ -157,76 +168,41 @@ class Signup:
         chat_history = self.sessions.get_messages(user_id) # Includes current user message
         messages_for_llm.extend(chat_history[-self.config.history_limit:])
         
-        tool_definitions = [self.edit_user_profile_tool.get_openai_tool_definition()]
         
         llm_response_text = ""
         try:
-            module_logger.debug(f"LLM call for {user_id}. Messages: {json.dumps(messages_for_llm, indent=2)}. Tools: {[t['function']['name'] for t in tool_definitions]}")
-            response = await self.client.chat.completions.create(
-                model=self.config.openai_default_model,
-                messages=messages_for_llm, # type: ignore
-                tools=tool_definitions, # type: ignore
-                tool_choice="auto",
-                temperature=0.5, # Consider making configurable
-            )
-            response_message: ChatCompletionMessage = response.choices[0].message
+            module_logger.debug(f"LLMClient.generate call for {user_id}. Messages: {json.dumps(messages_for_llm, indent=2)}")
             
-            current_llm_messages_for_follow_up = list(messages_for_llm)
-            current_llm_messages_for_follow_up.append(response_message.model_dump(exclude_none=True))
+            # The LLMClient and its provider will handle the tool call loop
+            generated_content, collected_tool_payloads = await self.llm_client.generate(
+                messages=messages_for_llm,
+                # model=self.config.openai_default_model, # Already set in LLMClient init or can override here
+                use_tools=["edit_user_profile"],
+                tool_execution_context={"user_id": user_id}, # Pass user_id for the tool
+                temperature=0.5,
+                # max_tool_iterations can be passed if needed (default is 5 in OpenAIProvider)
+            )
+            llm_response_text = generated_content or ""
+            
+            if collected_tool_payloads:
+                module_logger.info(f"Collected tool payloads for {user_id}: {collected_tool_payloads}")
+                # Handle payloads if your tools are designed to return them (EditUserProfileTool currently doesn't)
 
+            # If LLM gives an empty response after a successful update, you might still want a default ack.
+            # The OpenAIProvider.generate loop tries to get a final text response.
+            # However, if the tool was called and `generated_content` is empty, check if an update happened.
+            # This part might need adjustment based on how `LLMClient.generate` behaves when the last step was a tool call.
+            # The current OpenAIProvider should return content after tool execution.
+            if not llm_response_text:
+                 # Re-fetch profile to see if an update happened
+                _, profile_error = self._get_user_profile_as_model(user_id)
+                if not profile_error: # and an update was implied by tool execution
+                    llm_response_text = self.config.profile_updated_ack # Or a more dynamic ack.
 
-            if response_message.tool_calls:
-                module_logger.debug(f"LLM requested tool calls for {user_id}: {response_message.tool_calls}")
-                
-                for tool_call in response_message.tool_calls:
-                    function_name = tool_call.function.name
-                    tool_call_id = tool_call.id
-                    
-                    try:
-                        function_args = json.loads(tool_call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        module_logger.error(f"Invalid JSON in tool arguments for {function_name}: {tool_call.function.arguments}. Error: {e}")
-                        tool_response_str = json.dumps({"status": "error", "message": "Invalid arguments format."})
-                    else:
-                        module_logger.info(f"Executing tool '{function_name}' for {user_id} with args: {function_args}")
-                        if function_name == self.edit_user_profile_tool.name:
-                            tool_exec_result: ToolExecutionResult = self.edit_user_profile_tool(user_id=user_id, **function_args)
-                            tool_response_str = tool_exec_result.content
-                        else:
-                            module_logger.warning(f"Unknown tool '{function_name}' requested by LLM for {user_id}.")
-                            tool_response_str = json.dumps({"status": "error", "message": f"Tool '{function_name}' not found."})
-                    
-                    module_logger.info(f"Tool '{function_name}' response for {user_id}: {tool_response_str}")
-                    current_llm_messages_for_follow_up.append({
-                        "tool_call_id": tool_call_id,
-                        "role": "tool",
-                        "name": function_name,
-                        "content": tool_response_str,
-                    })
-                
-                module_logger.debug(f"Requesting LLM follow-up for {user_id} after tool execution(s).")
-                follow_up_response = await self.client.chat.completions.create(
-                    model=self.config.openai_default_model,
-                    messages=current_llm_messages_for_follow_up, # type: ignore
-                    temperature=0.5,
-                )
-                llm_response_text = follow_up_response.choices[0].message.content or ""
-                if follow_up_response.choices[0].message.tool_calls:
-                     module_logger.warning(f"LLM attempted a new tool call in follow-up for {user_id}. Ignoring. Content: '{llm_response_text}'")
-
-                # If LLM gives an empty response after a successful update, use default ack.
-                if not llm_response_text:
-                    # Check if profile was actually updated by parsing tool_response_str from the relevant tool call
-                    # This part could be more robust by checking the status in tool_response_str
-                    llm_response_text = self.config.profile_updated_ack
-
-            else: # No tool calls
-                llm_response_text = response_message.content or ""
-
-        except OpenAIError as e: # More specific OpenAI errors
-            module_logger.exception(f"OpenAI API error during LLM call for {user_id}: {e}")
+        except (ProviderError, ToolError, LLMToolkitError) as e: # Catch toolkit specific errors
+            module_logger.exception(f"LLM Toolkit error during interaction for {user_id}: {e}")
             llm_response_text = self.config.default_error_message
-        except Exception as e:
+        except Exception as e: # General errors
             module_logger.exception(f"Unexpected error during LLM interaction for {user_id}: {e}")
             llm_response_text = self.config.default_error_message
 

@@ -1,0 +1,4 @@
+pydantic>=2.11.3
+openai>=1.76.0
+python-dotenv
+git+https://github.com/carboni123/llm-factory-toolkit.git
