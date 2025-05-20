@@ -74,21 +74,39 @@ class Signup:
         return success
 
     def _get_user_profile_as_model(self, user_id: str) -> Tuple[Optional[BaseModel], Optional[str]]:
-        profile_dict, error_msg = self.get_user_profile(user_id)
-        if error_msg:
+        profile_dict, error_msg = self.get_user_profile(user_id) # This is from the app (e.g., examples/interactive_test.py)
+        
+        if error_msg: # If the app's get_user_profile function itself reported an error
+            module_logger.error(f"Error from get_user_profile_func for {user_id}: {error_msg}")
             return None, error_msg
         
-        data_for_model = profile_dict if profile_dict is not None else {}
+        # If profile_dict is None (meaning new user or no data), initialize data_for_model with user_id.
+        # Otherwise, use the retrieved profile_dict.
+        if profile_dict is None:
+            data_for_model = {"user_id": user_id} # Ensure user_id is present for new profiles
+        else:
+            data_for_model = profile_dict.copy() # Use a copy
+            if "user_id" not in data_for_model: # Ensure user_id is in the dict from DB
+                data_for_model["user_id"] = user_id
+
+
         try:
             # Filter to only known fields to avoid validation errors for extra db fields
+            # not defined in self.user_model_cls, but ensure user_id is always passed if it's part of the model.
             valid_data = {k: v for k, v in data_for_model.items() if k in self.user_model_cls.model_fields}
+            
+            # Ensure 'user_id' is in valid_data if it's a field in the model,
+            # especially if it might have been filtered out or was missing from profile_dict.
+            if "user_id" in self.user_model_cls.model_fields and "user_id" not in valid_data:
+                valid_data["user_id"] = user_id # Add it from the method argument
+
             user_profile_instance = self.user_model_cls(**valid_data)
             return user_profile_instance, None
         except ValidationError as e:
-            module_logger.error(f"Validation error parsing profile for {user_id} into {self.user_model_cls.__name__}: {e}")
+            module_logger.error(f"Validation error parsing profile for {user_id} into {self.user_model_cls.__name__}. Data: {valid_data}, Error: {e}")
             return None, f"Error parsing user profile data: {e}"
-        except Exception as e:
-            module_logger.error(f"Error instantiating {self.user_model_cls.__name__} for {user_id}: {e}")
+        except Exception as e: # Catch other potential errors during model instantiation
+            module_logger.error(f"Unexpected error instantiating {self.user_model_cls.__name__} for {user_id} with data {valid_data}: {e}", exc_info=True)
             return None, f"Internal error processing user profile: {e}"
 
 
@@ -123,7 +141,8 @@ class Signup:
              return self.config.default_error_message
 
         missing_fields = self.get_missing_fields(user_profile_instance)
-        
+        module_logger.info(f"Current missing fields: {missing_fields}")
+
         # The system prompt will guide the LLM. If it's the first turn, LLM should naturally greet and ask.
         # If signup is complete, the prompt tells the LLM.
         profile_json_for_prompt = user_profile_instance.model_dump_json(indent=2, exclude_none=True)
@@ -157,7 +176,7 @@ class Signup:
 
 
             if response_message.tool_calls:
-                module_logger.info(f"LLM requested tool calls for {user_id}: {response_message.tool_calls}")
+                module_logger.debug(f"LLM requested tool calls for {user_id}: {response_message.tool_calls}")
                 
                 for tool_call in response_message.tool_calls:
                     function_name = tool_call.function.name
@@ -185,7 +204,7 @@ class Signup:
                         "content": tool_response_str,
                     })
                 
-                module_logger.info(f"Requesting LLM follow-up for {user_id} after tool execution(s).")
+                module_logger.debug(f"Requesting LLM follow-up for {user_id} after tool execution(s).")
                 follow_up_response = await self.client.chat.completions.create(
                     model=self.config.openai_default_model,
                     messages=current_llm_messages_for_follow_up, # type: ignore
@@ -194,7 +213,6 @@ class Signup:
                 llm_response_text = follow_up_response.choices[0].message.content or ""
                 if follow_up_response.choices[0].message.tool_calls:
                      module_logger.warning(f"LLM attempted a new tool call in follow-up for {user_id}. Ignoring. Content: '{llm_response_text}'")
-                module_logger.info(f"LLM follow-up response for {user_id}: {llm_response_text}")
 
                 # If LLM gives an empty response after a successful update, use default ack.
                 if not llm_response_text:
@@ -204,7 +222,6 @@ class Signup:
 
             else: # No tool calls
                 llm_response_text = response_message.content or ""
-                module_logger.info(f"LLM response (no tool call) for {user_id}: {llm_response_text}")
 
         except OpenAIError as e: # More specific OpenAI errors
             module_logger.exception(f"OpenAI API error during LLM call for {user_id}: {e}")

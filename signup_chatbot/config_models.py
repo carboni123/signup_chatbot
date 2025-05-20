@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 DEFAULT_WELCOME_MESSAGE = "Welcome! To get started, I need a bit of information to set up your profile."
 DEFAULT_SIGNUP_PROMPT_FORMAT = "Please provide your {fields_list}."
 DEFAULT_LLM_SYSTEM_PROMPT_TEMPLATE = """Your primary goal is to complete the user's profile by collecting necessary information.
-The user's profile structure is defined by a model, and you need to fill its fields.
-Use the 'edit_user_profile' tool to save any information the user provides.
+The user must go through the signup process. Start by asking the user about missing fields information.
+CRITICAL: **Immediately use the 'edit_user_profile' tool to save any new information the user provides.**
 Ask for missing information conversationally, one piece or a small logical group at a time.
 If the user provides multiple pieces of information at once, try to capture all of them.
 
@@ -18,6 +18,7 @@ Current User Profile (JSON format):
 
 Fields that are currently missing or need to be collected: {missing_fields_list}
 
+Inform the user that they must go through the signup process. e.g: "Hello! How can I assist you today? Before we can start, let's fill your profile information."
 If all essential fields are complete, you can confirm this and ask if the user needs further assistance.
 Respond in the language of the user's input if discernible, otherwise default to a common conversational language.
 Be polite and helpful.
@@ -32,7 +33,7 @@ class SignupConfig(BaseModel):
         None, description="OpenAI API key. If None, attempts to use OPENAI_API_KEY env var."
     )
     openai_default_model: str = Field("gpt-4o-mini", description="Default OpenAI model to use for chat completions.")
-    history_limit: int = Field(10, description="Number of past messages to include in the context for the LLM.")
+    history_limit: int = Field(20, description="Number of past messages to include in the context for the LLM.")
 
     welcome_message: str = Field(
         DEFAULT_WELCOME_MESSAGE, description="Initial welcome message if needed (though LLM usually handles greeting)."

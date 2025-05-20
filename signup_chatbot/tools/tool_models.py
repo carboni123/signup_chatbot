@@ -10,4 +10,3 @@ class ToolExecutionResult(BaseModel):
     action_needed: bool = False # Indicates if further action is required from the agent/LLM based on this tool's direct output
     error: Optional[str] = None # Detailed error message for logging/debugging, not usually for LLM
     
-    # You can add other fields if necessary, e.g., raw_result: Any

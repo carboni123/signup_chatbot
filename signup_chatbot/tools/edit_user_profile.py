@@ -77,7 +77,7 @@ class EditUserProfileTool:
             result_dict = {"status": "no_action", "message": "No profile update parameters were specified or valid."}
             return ToolExecutionResult(content=json.dumps(result_dict))
 
-        module_logger.info(f"Validated profile update for user_id {user_id}: {profile_update}")
+        module_logger.debug(f"Validated profile update for user_id {user_id}: {profile_update}")
 
         error_message_for_llm: Optional[str] = None
         full_error_details: Optional[str] = None
@@ -90,7 +90,7 @@ class EditUserProfileTool:
             if success:
                 updated_fields_str = ", ".join(profile_update.keys())
                 success_message = f"Successfully updated user profile. Updated fields: {updated_fields_str}."
-                module_logger.info(f"{success_message} for user_id: {user_id}")
+                module_logger.debug(f"{success_message} for user_id: {user_id}")
                 result_dict = {"status": "success", "message": success_message, "updated_fields": list(profile_update.keys())}
             else:
                 error_message_for_llm = "Failed to save the updated user profile information."
