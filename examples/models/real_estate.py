@@ -50,12 +50,12 @@ class SignupCoreInfo(BaseModel):
 
 class UserProfile(SignupCoreInfo):
     primary_transaction_type: Optional[TransactionType] = Field(None, description="Typical goal (buy or rent).")
-    preferred_property_types: List[PropertyType] = Field(
-        default_factory=list,
+    preferred_property_types: Optional[List[PropertyType]] = Field(
+        None,
         description="User's preferred property types."
     )
-    general_preferences: List[str] = Field(
-        default_factory=list,
+    general_preferences: Optional[List[str]] = Field(
+        None,
         description="Other recurring needs (e.g., 'pet-friendly', 'garage')."
     )
     signup_completed: bool = Field(

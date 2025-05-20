@@ -3,7 +3,7 @@ import logging
 import json
 from typing import Dict, Any, Callable, Type, Optional
 
-from pydantic import BaseModel, ValidationError # Add pydantic.ValidationError if it was missed
+from pydantic import BaseModel, ValidationError
 from .tool_models import ToolExecutionResult
 
 module_logger = logging.getLogger(__name__)
@@ -59,14 +59,15 @@ class EditUserProfileTool:
         **kwargs: Any
     ) -> ToolExecutionResult:
         module_logger.info(f"Executing {self.name} tool for user_id: {user_id} with raw args: {kwargs}")
-
+        
+        error_message: Optional[str] = None
         try:
             profile_update_model = self._editable_fields_model(**kwargs)
             profile_update = profile_update_model.model_dump(exclude_unset=True, by_alias=False)
         except ValidationError as e:
             error_message = f"Invalid parameters provided for {self.name}: {e.errors()}"
             module_logger.warning(f"{error_message} for user_id: {user_id}")
-            result_dict = {"status": "error", "message": "Invalid data provided. Please check the format and values."}
+            result_dict = {"status": "error", "message": error_message}
             return ToolExecutionResult(
                 content=json.dumps(result_dict),
                 error=error_message
@@ -79,8 +80,6 @@ class EditUserProfileTool:
 
         module_logger.debug(f"Validated profile update for user_id {user_id}: {profile_update}")
 
-        error_message_for_llm: Optional[str] = None
-        full_error_details: Optional[str] = None
         try:
             success = self._update_user_state_func(
                 user_id=user_id,
@@ -93,18 +92,16 @@ class EditUserProfileTool:
                 module_logger.debug(f"{success_message} for user_id: {user_id}")
                 result_dict = {"status": "success", "message": success_message, "updated_fields": list(profile_update.keys())}
             else:
-                error_message_for_llm = "Failed to save the updated user profile information."
-                full_error_details = f"Update function returned False for user_id: {user_id}, update: {profile_update}"
-                module_logger.error(full_error_details)
-                result_dict = {"status": "error", "message": error_message_for_llm}
+                error_message = f"Update function returned False for user_id: {user_id}, update: {profile_update}"
+                module_logger.error(error_message)
+                result_dict = {"status": "error", "message": error_message}
 
         except Exception as e:
-            full_error_details = f"An unexpected error occurred while updating user profile for {user_id}: {e}"
-            module_logger.exception(f"Unexpected error in tool '{self.name}': {full_error_details}") # Logs full traceback
-            error_message_for_llm = "An unexpected error occurred while processing your request."
-            result_dict = {"status": "error", "message": error_message_for_llm}
+            error_message = f"An unexpected error occurred while updating user profile for {user_id}: {e}"
+            module_logger.exception(f"Unexpected error in tool '{self.name}': {error_message}") # Logs full traceback
+            result_dict = {"status": "error", "message": error_message}
 
         return ToolExecutionResult(
             content=json.dumps(result_dict),
-            error=full_error_details
+            error=error_message
         )
