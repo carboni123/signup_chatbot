@@ -90,7 +90,8 @@ async def interactive_main_loop():
         user_model_cls=UserProfile, # Use the detailed UserProfile model
         get_user_profile_func=get_my_user_profile,
         update_user_profile_func=update_my_user_profile,
-        signup_config=config
+        signup_config=config,
+        user_model_fields_to_ignore=["user_id"]
     )
 
     user_id = input("Enter a User ID (e.g., test_user_interactive): ").strip()

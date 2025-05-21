@@ -25,6 +25,7 @@ YOUNGEST_POSSIBLE_BIRTH_YEAR = CURRENT_YEAR - MIN_AGE
 
 # --- Signup and UserProfile Models ---
 class SignupCoreInfo(BaseModel):
+    user_id: str = Field(..., description="Unique identifier (e.g., 'whatsapp:+11234567890').")
     name: Optional[str] = Field(None, description="User's full name.")
     email: Optional[EmailStr] = Field(None, description="User's primary email address.")
     birth_year: Optional[PositiveInt] = Field(

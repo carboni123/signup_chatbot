@@ -66,12 +66,8 @@ class EditUserProfileTool:
             profile_update = profile_update_model.model_dump(exclude_unset=True, by_alias=False)
         except ValidationError as e:
             error_message = f"Invalid parameters provided for {self.name}: {e.errors()}"
-            module_logger.warning(f"{error_message} for user_id: {user_id}")
-            result_dict = {"status": "error", "message": error_message}
-            return ToolExecutionResult(
-                content=json.dumps(result_dict),
-                error=error_message
-            )
+            module_logger.error(error_message)
+            raise ValidationError(error_message) from e
 
         if not profile_update:
             module_logger.warning(f"Tool '{self.name}' called for {user_id} but no valid update parameters provided.")

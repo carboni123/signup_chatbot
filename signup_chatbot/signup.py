@@ -4,7 +4,8 @@ import logging
 import json
 from typing import Optional, Tuple, Callable, Type, Dict, Any, List
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, create_model, Field
+from pydantic.fields import FieldInfo
 from llm_factory_toolkit import LLMClient, ToolFactory
 from llm_factory_toolkit.exceptions import ProviderError, ToolError, LLMToolkitError
 
@@ -27,6 +28,7 @@ class Signup:
         signup_config: Optional[SignupConfig] = None,
         edit_tool_name: str = "edit_user_profile",
         edit_tool_description: str = "Updates the user's profile information based on provided details.",
+        user_model_fields_to_ignore: Optional[List[str]] = None,
     ):
         """
         Initializes the Signup handler.
@@ -44,15 +46,17 @@ class Signup:
         self.user_model_cls = user_model_cls
         self.get_user_profile = get_user_profile_func
         self.update_user_profile = update_user_profile_func
-        
+        self.user_model_fields_to_ignore = user_model_fields_to_ignore or []
+        self._llm_visible_profile_model_cls = self._create_llm_visible_model_type()
+
         self.config = signup_config or SignupConfig()
 
         self.sessions = Memory()
-        
+
         self.tool_factory = ToolFactory()
         self.edit_user_profile_tool = EditUserProfileTool(
             update_user_state_func=self._internal_profile_update_wrapper,
-            editable_fields_model=self.user_model_cls,
+            editable_fields_model=self._llm_visible_profile_model_cls,
             tool_name=edit_tool_name,
             tool_description=edit_tool_description,
         )
@@ -69,10 +73,10 @@ class Signup:
             tool_factory=self.tool_factory,
             model=self.config.openai_default_model # Pass default model to provider
         )
-        
+
         if not (self.config.openai_api_key or os.getenv("OPENAI_API_KEY")):
             module_logger.warning("OpenAI API key is not set. LLM calls will fail.")
-            
+
     def _internal_profile_update_wrapper(
         self,
         user_id: str,
@@ -84,13 +88,47 @@ class Signup:
             module_logger.error(f"Profile update failed for user {user_id} via wrapper: {error_msg}")
         return success
 
+    def _create_llm_visible_model_type(self) -> Type[BaseModel]:
+        """
+        Dynamically creates a Pydantic model class that includes only the fields
+        from self.user_model_cls that are NOT in self.fields_to_exclude_from_llm_prompt.
+        """
+        original_model_cls = self.user_model_cls
+
+        fields_for_dynamic_model: Dict[str, Tuple[Any, FieldInfo]] = {}
+        for name, field_info in original_model_cls.model_fields.items():
+            if name not in self.user_model_fields_to_ignore:
+                # We pass the original annotation and the full FieldInfo object
+                # This preserves defaults, validators, descriptions, etc., for the included fields.
+                fields_for_dynamic_model[name] = (field_info.annotation, field_info)
+
+        # Sanitize model name for create_model
+        dynamic_model_name = f"LLMVisible{original_model_cls.__name__}"
+        dynamic_model_name = "".join(c if c.isalnum() else "_" for c in dynamic_model_name)
+
+        # Attempt to carry over the model config
+        # Pydantic's create_model uses a __config__ dict, not a ModelConfig class directly
+        config_dict_for_dynamic_model = None
+        if hasattr(original_model_cls, "model_config") and isinstance(original_model_cls.model_config, dict):
+            # Pydantic v2 ConfigDict
+            config_dict_for_dynamic_model = original_model_cls.model_config.copy()
+
+        dynamic_model = create_model(
+            dynamic_model_name, **fields_for_dynamic_model, __config__=config_dict_for_dynamic_model
+        )
+        module_logger.debug(
+            f"Created dynamic model '{dynamic_model.__name__}' with fields: "
+            f"{list(dynamic_model.model_fields.keys())}"
+        )
+        return dynamic_model
+
     def _get_user_profile_as_model(self, user_id: str) -> Tuple[Optional[BaseModel], Optional[str]]:
         profile_dict, error_msg = self.get_user_profile(user_id) # This is from the app (e.g., examples/interactive_test.py)
-        
+
         if error_msg: # If the app's get_user_profile function itself reported an error
             module_logger.error(f"Error from get_user_profile_func for {user_id}: {error_msg}")
             return None, error_msg
-        
+
         # If profile_dict is None (meaning new user or no data), initialize data_for_model with user_id.
         # Otherwise, use the retrieved profile_dict.
         if profile_dict is None:
@@ -99,7 +137,6 @@ class Signup:
             data_for_model = profile_dict.copy() # Use a copy
             if "user_id" not in data_for_model: # Ensure user_id is in the dict from DB
                 data_for_model["user_id"] = user_id
-
 
         try:
             # Filter to only known fields to avoid validation errors for extra db fields
@@ -120,10 +157,12 @@ class Signup:
             module_logger.error(f"Unexpected error instantiating {self.user_model_cls.__name__} for {user_id} with data {valid_data}: {e}", exc_info=True)
             return None, f"Internal error processing user profile: {e}"
 
-
     def get_missing_fields(self, user_profile_instance: BaseModel) -> List[str]:
         missing = []
         for field_name in self.user_model_cls.model_fields.keys():
+            # Ignore fields
+            if field_name in self.user_model_fields_to_ignore:
+                continue
             value = getattr(user_profile_instance, field_name, None)
             if value is None: # Considers a field missing if its value is None
                 missing.append(field_name)
@@ -147,9 +186,9 @@ class Signup:
             self.sessions.save_message(user_id, content=self.config.default_error_message, role="assistant")
             return self.config.default_error_message
         if user_profile_instance is None: # Should be caught by profile_error typically
-             module_logger.critical(f"User profile instance is None for {user_id} without profile_error. This is unexpected.")
-             self.sessions.save_message(user_id, content=self.config.default_error_message, role="assistant")
-             return self.config.default_error_message
+            module_logger.critical(f"User profile instance is None for {user_id} without profile_error. This is unexpected.")
+            self.sessions.save_message(user_id, content=self.config.default_error_message, role="assistant")
+            return self.config.default_error_message
 
         missing_fields = self.get_missing_fields(user_profile_instance)
         module_logger.info(f"Current missing fields: {missing_fields}")
@@ -167,12 +206,11 @@ class Signup:
         ]
         chat_history = self.sessions.get_messages(user_id) # Includes current user message
         messages_for_llm.extend(chat_history[-self.config.history_limit:])
-        
-        
+
         llm_response_text = ""
         try:
             module_logger.debug(f"LLMClient.generate call for {user_id}. Messages: {json.dumps(messages_for_llm, indent=2)}")
-            
+
             # The LLMClient and its provider will handle the tool call loop
             llm_response_text, _ = await self.llm_client.generate(
                 messages=messages_for_llm,
@@ -205,7 +243,6 @@ class Signup:
                         llm_response_text = self.config.signup_complete_message
                 else: # Should not happen
                     llm_response_text = self.config.default_error_message
-
 
         self.sessions.save_message(user_id, content=llm_response_text, role="assistant")
         module_logger.info(f"Final bot reply for {user_id}: {llm_response_text}")
