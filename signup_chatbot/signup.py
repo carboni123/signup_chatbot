@@ -142,7 +142,7 @@ class Signup:
             # Filter to only known fields to avoid validation errors for extra db fields
             # not defined in self.user_model_cls, but ensure user_id is always passed if it's part of the model.
             valid_data = {k: v for k, v in data_for_model.items() if k in self.user_model_cls.model_fields}
-            
+
             # Ensure 'user_id' is in valid_data if it's a field in the model,
             # especially if it might have been filtered out or was missing from profile_dict.
             if "user_id" in self.user_model_cls.model_fields and "user_id" not in valid_data:
@@ -175,26 +175,52 @@ class Signup:
             return False
         return not self.get_missing_fields(user_profile_instance)
 
-    async def handle_message(self, user_id: str, user_input: str) -> str:
-        module_logger.info(f"Handling message for user_id: {user_id}, input: '{user_input[:100]}...'") # Log truncated input
+    async def handle_message(self, user_id: str, user_input: str, interaction_context: str = "new_user") -> List[str]:
+        module_logger.info(f"Handling message for user_id: {user_id}, input: '{user_input[:100]}...'")
 
-        self.sessions.save_message(user_id, content=user_input, role="user")
+        final_bot_messages: List[str] = []
+
+        # Check history BEFORE adding current user_input to determine if this is the first real exchange.
+        history_before_this_turn = self.sessions.get_messages(user_id)
+        is_first_exchange = not history_before_this_turn
 
         user_profile_instance, profile_error = self._get_user_profile_as_model(user_id)
+
+        # Handle profile loading errors early
         if profile_error:
             module_logger.error(f"Profile error for {user_id}: {profile_error}")
-            self.sessions.save_message(user_id, content=self.config.default_error_message, role="assistant")
-            return self.config.default_error_message
-        if user_profile_instance is None: # Should be caught by profile_error typically
+            error_msg = self.config.default_error_message
+            # Save user's message first, then the error, before returning
+            self.sessions.save_message(user_id, content=user_input, role="user")
+            self.sessions.save_message(user_id, content=error_msg, role="assistant")
+            return [error_msg]
+        if user_profile_instance is None: # Should be caught by profile_error, but as a safeguard
             module_logger.critical(f"User profile instance is None for {user_id} without profile_error. This is unexpected.")
-            self.sessions.save_message(user_id, content=self.config.default_error_message, role="assistant")
-            return self.config.default_error_message
+            error_msg = self.config.default_error_message
+            self.sessions.save_message(user_id, content=user_input, role="user")
+            self.sessions.save_message(user_id, content=error_msg, role="assistant")
+            return [error_msg]
 
         missing_fields = self.get_missing_fields(user_profile_instance)
-        module_logger.info(f"Current missing fields: {missing_fields}")
+        signup_is_incomplete = bool(missing_fields)
 
-        # The system prompt will guide the LLM. If it's the first turn, LLM should naturally greet and ask.
-        # If signup is complete, the prompt tells the LLM.
+        # Save first so the LLM knows the context
+        self.sessions.save_message(user_id, content=user_input, role="user")
+
+        # Add initial welcome message if it's the first exchange and signup is incomplete
+        if is_first_exchange and signup_is_incomplete and interaction_context != "new_user":
+            welcome_message = self.config.welcome_back_incomplete
+            final_bot_messages.append(welcome_message)
+            self.sessions.save_message(user_id, content=welcome_message, role="assistant")
+            module_logger.info(f"Added initial welcome message for {user_id}: '{welcome_message}'")
+        elif is_first_exchange and signup_is_incomplete:
+            welcome_message = self.config.welcome_message
+            final_bot_messages.append(welcome_message)
+            self.sessions.save_message(user_id, content=welcome_message, role="assistant")
+            module_logger.info(f"Added initial welcome message for {user_id}: '{welcome_message}'")
+
+        # Prepare system prompt with current profile state
+        # missing_fields here are based on user_profile_instance fetched *before* this turn's LLM interaction.
         profile_json_for_prompt = user_profile_instance.model_dump_json(indent=2, exclude_none=True)
         system_prompt_content = self.config.llm_system_prompt_template.format(
             user_profile_json=profile_json_for_prompt,
@@ -210,40 +236,47 @@ class Signup:
         llm_response_text = ""
         try:
             module_logger.debug(f"LLMClient.generate call for {user_id}. Messages: {json.dumps(messages_for_llm, indent=2)}")
-
-            # The LLMClient and its provider will handle the tool call loop
             llm_response_text, _ = await self.llm_client.generate(
                 messages=messages_for_llm,
-                # model=self.config.openai_default_model, # Already set in LLMClient init or can override here
                 use_tools=["edit_user_profile"],
-                tool_execution_context={"user_id": user_id}, # Pass user_id for the tool
+                tool_execution_context={"user_id": user_id},
                 temperature=0.5,
-                # max_tool_iterations can be passed if needed (default is 5 in OpenAIProvider)
             )
-
-        except (ProviderError, ToolError, LLMToolkitError) as e: # Catch toolkit specific errors
+        except (ProviderError, ToolError, LLMToolkitError) as e:
             module_logger.exception(f"LLM Toolkit error during interaction for {user_id}: {e}")
             llm_response_text = self.config.default_error_message
-        except Exception as e: # General errors
+        except Exception as e:
             module_logger.exception(f"Unexpected error during LLM interaction for {user_id}: {e}")
             llm_response_text = self.config.default_error_message
 
-        # Fallback if LLM response is empty
+        # Fallback logic for empty LLM response
         if not llm_response_text:
-            if self.is_signup_complete(user_id):
-                llm_response_text = self.config.signup_complete_message
+            # Re-fetch profile as LLM tool calls might have updated it
+            profile_after_llm, profile_fetch_err = self._get_user_profile_as_model(user_id)
+            if profile_fetch_err or not profile_after_llm:
+                module_logger.error(f"Error fetching profile after LLM for fallback: {profile_fetch_err}")
+                llm_response_text = self.config.default_error_message
             else:
-                # Try to prompt for the next specific missing field as a simple fallback
-                updated_profile_instance, _ = self._get_user_profile_as_model(user_id) # Re-fetch
-                if updated_profile_instance:
-                    current_missing_fields = self.get_missing_fields(updated_profile_instance)
-                    if current_missing_fields:
-                        llm_response_text = self.config.signup_prompt_format.format(fields_list=current_missing_fields[0])
-                    else: # Signup just completed, LLM didn't say anything
-                        llm_response_text = self.config.signup_complete_message
-                else: # Should not happen
-                    llm_response_text = self.config.default_error_message
+                current_missing_fields_after_llm = self.get_missing_fields(profile_after_llm)
+                if not current_missing_fields_after_llm: # Signup is now complete
+                    llm_response_text = self.config.signup_complete_message
+                else: # Signup still incomplete
+                    # current_missing_fields_after_llm should not be empty if signup is incomplete
+                    llm_response_text = self.config.signup_prompt_format.format(fields_list=current_missing_fields_after_llm[0])
 
-        self.sessions.save_message(user_id, content=llm_response_text, role="assistant")
-        module_logger.info(f"Final bot reply for {user_id}: {llm_response_text}")
-        return llm_response_text
+        # Add LLM's response (or fallback) to the list and save to history
+        if llm_response_text: # Ensure we don't add an empty string
+            final_bot_messages.append(llm_response_text)
+            self.sessions.save_message(user_id, content=llm_response_text, role="assistant")
+        elif not final_bot_messages:
+            # This case is reached if:
+            # 1. No initial_welcome_message was added (i.e., not first exchange OR signup was already complete).
+            # 2. llm_response_text is empty (LLM returned nothing, and fallback also resulted in empty string).
+            # To prevent returning an empty list, add a generic fallback message.
+            module_logger.warning(f"LLM and fallback produced no message for {user_id}, and no prior message in this turn's response list.")
+            generic_fallback = "I'm sorry, I couldn't generate a response at this moment. Could you try rephrasing or asking again?"
+            final_bot_messages.append(generic_fallback)
+            self.sessions.save_message(user_id, content=generic_fallback, role="assistant")
+
+        module_logger.info(f"Final bot replies for {user_id}: {final_bot_messages}")
+        return final_bot_messages

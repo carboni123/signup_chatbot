@@ -3,7 +3,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 # Default prompts (English, can be overridden via SignupConfig)
-DEFAULT_WELCOME_MESSAGE = "Welcome! To get started, I need a bit of information to set up your profile."
+DEFAULT_WELCOME_MESSAGE = "Welcome to {company_name}! How can I assist you today? Before we can start, let's fill your profile information.".format(company_name="Acme Inc.")
+DEFAULT_WELCOME_BACK_MESSAGE = "Welcome back to {company_name}! Your profile is still incomplete. Before we can start, let's finish your profile. If you do not wish to inform specific details, just let me know.".format(company_name="Acme Inc.")
 DEFAULT_SIGNUP_PROMPT_FORMAT = "Please provide your {fields_list}."
 DEFAULT_LLM_SYSTEM_PROMPT_TEMPLATE = """Your primary goal is to complete the user's profile by collecting necessary information.
 The user must go through the signup process. Start by asking the user about missing fields information.
@@ -18,7 +19,7 @@ Current User Profile (JSON format):
 
 Fields that are currently missing or need to be collected: {missing_fields_list}
 
-Inform the user that they must go through the signup process. e.g: "Hello! How can I assist you today? Before we can start, let's fill your profile information."
+Inform the user that they must go through the signup process.
 If all essential fields are complete, you can confirm this and ask if the user needs further assistance.
 Respond in the language of the user's input if discernible, otherwise default to a common conversational language.
 Be polite and helpful.
@@ -37,6 +38,10 @@ class SignupConfig(BaseModel):
 
     welcome_message: str = Field(
         DEFAULT_WELCOME_MESSAGE, description="Initial welcome message if needed (though LLM usually handles greeting)."
+    )
+    welcome_back_incomplete: str = Field(
+        DEFAULT_WELCOME_BACK_MESSAGE,
+        description="Message sent to a returning user with an incomplete profile who sends a generic greeting. Supports {company_name}.",
     )
     signup_prompt_format: str = Field(
         DEFAULT_SIGNUP_PROMPT_FORMAT,

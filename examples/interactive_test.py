@@ -147,8 +147,10 @@ async def interactive_main_loop():
 
         # --- Process Message ---
         print("Bot: Thinking...")
-        bot_response = await signup_handler.handle_message(user_id, user_input)
-        print(f"Bot: {bot_response}")
+        bot_response = await signup_handler.handle_message(user_id, user_input,interaction_context="returning_user")
+        for message in bot_response:
+            print(f"Bot: {message}")
+            await asyncio.sleep(1)
 
         # Check if signup is complete after each interaction
         if signup_handler.is_signup_complete(user_id):
