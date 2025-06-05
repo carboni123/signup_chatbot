@@ -169,9 +169,14 @@ class Signup:
         return missing
 
     def is_signup_complete(self, user_id: str) -> bool:
+        if self.sessions.get_session_metadata_value(user_id, "signup_complete", False):
+            return True
+
         user_profile_instance, error_msg = self._get_user_profile_as_model(user_id)
         if error_msg or user_profile_instance is None:
-            module_logger.warning(f"Cannot determine signup completion for {user_id} due to profile error: {error_msg}")
+            module_logger.warning(
+                f"Cannot determine signup completion for {user_id} due to profile error: {error_msg}"
+            )
             return False
         return not self.get_missing_fields(user_profile_instance)
 
@@ -201,7 +206,26 @@ class Signup:
             self.sessions.save_message(user_id, content=error_msg, role="assistant")
             return [error_msg]
 
-        missing_fields = self.get_missing_fields(user_profile_instance)
+        # Determine if signup has been marked complete via skip command
+        signup_completed_flag = self.sessions.get_session_metadata_value(
+            user_id, "signup_complete", False
+        )
+
+        # Check for skip command on this turn
+        if (
+            not signup_completed_flag
+            and self.config.skip_command
+            and user_input.strip().lower() == self.config.skip_command.lower()
+        ):
+            self.sessions.update_session_metadata(user_id, "signup_complete", True)
+            self.sessions.save_message(user_id, content=user_input, role="user")
+            completion_msg = self.config.signup_complete_message
+            final_bot_messages.append(completion_msg)
+            self.sessions.save_message(user_id, content=completion_msg, role="assistant")
+            module_logger.info(f"User {user_id} invoked skip command; signup marked complete.")
+            return final_bot_messages
+
+        missing_fields = [] if signup_completed_flag else self.get_missing_fields(user_profile_instance)
         signup_is_incomplete = bool(missing_fields)
 
         # Save first so the LLM knows the context

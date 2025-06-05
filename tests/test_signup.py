@@ -72,3 +72,21 @@ def test_handle_message_basic(dummy_llm_client):
     # history should contain user and assistant message
     hist = signup.sessions.get_messages("u2")
     assert hist and hist[-1]["role"] == "assistant"
+
+
+def test_skip_command(dummy_llm_client):
+    USER_DB.clear()
+    signup = Signup(
+        user_model_cls=SimpleProfile,
+        get_user_profile_func=get_profile,
+        update_user_profile_func=update_profile,
+        signup_config=SignupConfig(skip_command="/skip"),
+        user_model_fields_to_ignore=["user_id"],
+    )
+
+    import asyncio
+
+    replies = asyncio.run(signup.handle_message("u3", "/skip"))
+    assert not dummy_llm_client.calls  # LLM should not be invoked
+    assert signup.is_signup_complete("u3")
+    assert any(signup.config.signup_complete_message in r for r in replies)

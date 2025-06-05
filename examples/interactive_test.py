@@ -2,7 +2,10 @@
 import asyncio
 import os
 import logging
+import pytest
 from pydantic import ValidationError
+
+pytest.skip("Examples are not part of the test suite", allow_module_level=True)
 from typing import Optional, Tuple, Dict, Any
 
 import sys
