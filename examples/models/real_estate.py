@@ -50,10 +50,13 @@ class SignupCoreInfo(BaseModel):
     )
 
 class UserProfile(SignupCoreInfo):
-    primary_transaction_type: Optional[TransactionType] = Field(None, description="Typical goal (buy or rent).")
+    primary_transaction_type: Optional[TransactionType] = Field(
+        None, 
+        description=f"Main deal type the user is pursuing. Allowed values: {[t.value for t in TransactionType]}"
+    )
     preferred_property_types: Optional[List[PropertyType]] = Field(
         None,
-        description="User's preferred property types."
+        description=f"List of property categories. Allowed values: {[p.value for p in PropertyType]}",
     )
     general_preferences: Optional[List[str]] = Field(
         None,
