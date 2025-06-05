@@ -207,9 +207,7 @@ class Signup:
             return [error_msg]
 
         # Determine if signup has been marked complete via skip command
-        signup_completed_flag = self.sessions.get_session_metadata_value(
-            user_id, "signup_complete", False
-        )
+        signup_completed_flag = self.is_signup_complete(user_id)
 
         # Check for skip command on this turn
         if (
@@ -248,7 +246,7 @@ class Signup:
         profile_json_for_prompt = user_profile_instance.model_dump_json(indent=2, exclude_none=True)
         system_prompt_content = self.config.llm_system_prompt_template.format(
             user_profile_json=profile_json_for_prompt,
-            missing_fields_list=", ".join(missing_fields) if missing_fields else "All fields filled."
+            missing_fields_list=", ".join(missing_fields) if missing_fields else "All fields were filled. Signup completed."
         )
 
         messages_for_llm: List[Dict[str, Any]] = [
