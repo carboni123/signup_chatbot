@@ -1,15 +1,14 @@
 # examples/test.py
 import asyncio
 import os
-from pydantic import BaseModel, EmailStr, Field
+import sys
 from typing import Optional, Tuple, Dict, Any
 from dotenv import load_dotenv
-load_dotenv()
-
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+from pydantic import BaseModel, EmailStr, Field
 from signup_chatbot import Signup, SignupConfig
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+load_dotenv()
 
 # 1. Define Your User Profile Model:
 class MyUserProfile(BaseModel):
@@ -102,7 +101,7 @@ async def main():
             print("Signup completed before all example messages were sent.")
             # break # You might want to break or continue with other interactions
 
-    print(f"\n--- Final Check ---")
+    print("\n--- Final Check ---")
     print(f"Signup complete for {user_id} at end? {signup_handler.is_signup_complete(user_id)}")
     
     final_profile_data, _ = get_my_user_profile(user_id)

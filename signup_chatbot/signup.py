@@ -4,7 +4,7 @@ import logging
 import json
 from typing import Optional, Tuple, Callable, Type, Dict, Any, List
 
-from pydantic import BaseModel, ValidationError, create_model, Field
+from pydantic import BaseModel, ValidationError, create_model
 from pydantic.fields import FieldInfo
 from llm_factory_toolkit import LLMClient, ToolFactory
 from llm_factory_toolkit.exceptions import ProviderError, ToolError, LLMToolkitError

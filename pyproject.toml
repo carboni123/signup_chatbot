@@ -1,6 +1,6 @@
 [project]
 name = "signup_chatbot"
-version = "0.0.2"
+version = "0.0.3"
 description = "Signup Module for Chatbots"
 authors = [{ name = "Diego Carboni", email = "diegofcarboni@gmail.com" }]
 dependencies = ["pydantic>=2.11.3", "openai>=1.76.0"]
