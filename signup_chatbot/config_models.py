@@ -28,6 +28,8 @@ DEFAULT_PROFILE_UPDATED_ACK = "Thanks, I've updated your profile with the inform
 DEFAULT_ERROR_MESSAGE = "I'm sorry, but I encountered an issue. Please try again."
 DEFAULT_SIGNUP_COMPLETE_MESSAGE = "Great, your profile setup is complete! How can I assist you further?"
 
+DEFAULT_SKIP_COMMAND = "/skip"
+
 
 class SignupConfig(BaseModel):
     openai_api_key: Optional[str] = Field(
@@ -57,4 +59,11 @@ class SignupConfig(BaseModel):
     default_error_message: str = Field(DEFAULT_ERROR_MESSAGE, description="Default error message to show to the user.")
     signup_complete_message: str = Field(
         DEFAULT_SIGNUP_COMPLETE_MESSAGE, description="Message to indicate signup completion."
+    )
+    skip_command: Optional[str] = Field(
+        DEFAULT_SKIP_COMMAND,
+        description=(
+            "Command that allows the user to skip the signup routine. "
+            "Set to None to disable the skip feature."
+        ),
     )
